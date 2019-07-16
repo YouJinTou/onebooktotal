@@ -1,4 +1,6 @@
-﻿namespace OBT.Core.Models
+﻿using System.Collections.Generic;
+
+namespace OBT.Core.Models
 {
     public class Book
     {
@@ -10,14 +12,14 @@
 
         public string Genre { get; set; }
 
-        public string Author { get; set; }
+        public IEnumerable<string> Authors { get; set; }
 
         public string Language { get; set; }
 
-        public int Year { get; set; }
+        public int? Year { get; set; }
 
         public string Format { get; set; }
 
-        public int Pages { get; set; }
+        public int? Pages { get; set; }
     }
 }
