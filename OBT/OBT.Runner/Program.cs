@@ -12,9 +12,11 @@ namespace OBT.Runner
             var serviceProvider = new ServiceCollection()
                 .AddHttpClient()
                 .AddTransient<IHttpService, HttpService>()
+                .AddTransient<IRetryServcie, RetryService>()
                 .BuildServiceProvider();
             var httpService = serviceProvider.GetService<IHttpService>();
-            var bookogs = new BookogsScraper(httpService);
+            var retryService = serviceProvider.GetService<IRetryServcie>();
+            var bookogs = new BookogsScraper(httpService, retryService);
 
             bookogs.ScrapeAsync().Wait();
         }

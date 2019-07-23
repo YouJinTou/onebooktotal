@@ -4,6 +4,7 @@ using OBT.Core.Extensions;
 using OBT.Core.Models;
 using OBT.Core.Models.Bookogs;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -12,14 +13,16 @@ namespace OBT.Core.Scrapers
 {
     public class BookogsScraper : IScraper
     {
-        private static readonly string BaseUrl = "https://www.bookogs.com";
+        private const string BaseUrl = "https://www.bookogs.com";
+        private const string TableXPath = "//tr[td='{0}']/td[2]/a/text()";
         private static readonly string ApiUrl = $"{BaseUrl}/api/browse/book?page={{0}}";
-        private static readonly string TableXPath = "//tr[td='{0}']/td[2]/a/text()";
         private readonly IHttpService httpService;
+        private readonly IRetryServcie retryService;
 
-        public BookogsScraper(IHttpService httpService)
+        public BookogsScraper(IHttpService httpService, IRetryServcie retryService)
         {
             this.httpService = httpService;
+            this.retryService = retryService;
         }
 
         public async Task<IEnumerable<Book>> ScrapeAsync()
@@ -30,46 +33,55 @@ namespace OBT.Core.Scrapers
             return books;
         }
 
+        private class Comp : IEqualityComparer<Rootobject>
+        {
+            public bool Equals(Rootobject x, Rootobject y)
+            {
+                return (x.entities[0].title == y.entities[0].title);
+            }
+
+            public int GetHashCode(Rootobject obj)
+            {
+                return obj.entities[0].title.GetHashCode();
+            }
+        }
+
         private async Task<IEnumerable<Rootobject>> GetRootObjectsAsync()
         {
             try
             {
                 var totalPages = Enumerable.Range(1, await this.GetTotalPages());
-                var pages = totalPages.ToBatches(40).Select(b => new { From = b.Min(), To = b.Max() });
-                var rootObjects = new List<Rootobject>();
-                var failedCalls = new List<int>();
+                var pageBatches = totalPages.ToBatches(300).Select(b => new { From = b.Min(), To = b.Max() });
+                var rootObjects = new ConcurrentBag<Rootobject>();
 
-                foreach (var page in pages)
+                foreach (var pageBatch in pageBatches)
                 {
                     var apiCallTasks = new List<Task>();
 
-                    for (int p = page.From; p <= page.To; p++)
+                    for (int p = pageBatch.From; p <= pageBatch.To; p++)
                     {
                         Console.WriteLine($"Page: {p}");
 
-                        var apiCallTask = Task.Run(async () =>
+                        var task = Task.Run(async () =>
                         {
-                            await this.RunApiTaskAsync(failedCalls, rootObjects, p);
+                            Func<Task> call = async () => await this.RunApiTaskAsync(rootObjects, p);
+
+                            await this.retryService.RetryAsync(call);
                         });
 
-                        apiCallTasks.Add(apiCallTask);
+                        apiCallTasks.Add(task);
 
                         await Task.Delay(1);
                     }
 
                     Task.WaitAll(apiCallTasks.ToArray());
 
-                    Console.WriteLine($"Batch from {page.From} to {page.To}");
+                    Console.WriteLine($"Batch from {pageBatch.From} to {pageBatch.To}");
 
-                    await Task.Delay(5000);
+                    var x = rootObjects.Distinct(new Comp()).ToList();
+                    await Task.Delay(100);
                 }
 
-                Console.WriteLine("Running failed tasks...");
-
-                for (int i = 0; i < failedCalls.Count; i++)
-                {
-                    await this.RunApiTaskAsync(failedCalls, rootObjects, failedCalls[i]);
-                }
 
                 return rootObjects;
             }
@@ -80,26 +92,17 @@ namespace OBT.Core.Scrapers
             }
         }
 
-        private async Task RunApiTaskAsync(ICollection<int> failedCalls, List<Rootobject> rootObjects, int p)
+        private async Task RunApiTaskAsync(ConcurrentBag<Rootobject> rootObjects, int page)
         {
-            try
-            {
-                var url = string.Format(ApiUrl, p);
+            var url = string.Format(ApiUrl, page);
 
-                Console.WriteLine($"Queueing up: {url}");
+            Console.WriteLine($"Queueing up: {url}");
 
-                var root = await this.httpService.GetAsync<Rootobject>(url);
+            var root = await this.httpService.GetAsync<Rootobject>(url);
 
-                rootObjects.Add(root);
+            rootObjects.Add(root);
 
-                Console.WriteLine("Added root.");
-            }
-            catch (Exception ex)
-            {
-                failedCalls.Add(p);
-
-                Console.WriteLine($"Failed page: {p}");
-            }
+            Console.WriteLine("Added root.");
         }
 
         private async Task<int> GetTotalPages()
