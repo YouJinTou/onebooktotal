@@ -5,7 +5,8 @@ namespace OBT.Core.Extensions
 {
     public static class CollectionExtensions
     {
-        public static IEnumerable<IEnumerable<T>> ToBatches<T>(this IEnumerable<T> collection, int batchSize)
+        public static IEnumerable<IEnumerable<T>> ToBatches<T>(
+            this IEnumerable<T> collection, int batchSize)
         {
             var batches = new List<IEnumerable<T>>();
             
