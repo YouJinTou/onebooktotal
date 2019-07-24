@@ -1,4 +1,5 @@
 ﻿using HtmlAgilityPack;
+using Microsoft.Extensions.Logging;
 using OBT.Core.Abstractions;
 using OBT.Core.Extensions;
 using OBT.Core.Models;
@@ -17,92 +18,57 @@ namespace OBT.Core.Scrapers
         private const string TableXPath = "//tr[td='{0}']/td[2]/a/text()";
         private static readonly string ApiUrl = $"{BaseUrl}/api/browse/book?page={{0}}";
         private readonly IHttpService httpService;
-        private readonly IRetryServcie retryService;
+        private readonly ILogger<BookogsScraper> logger;
 
-        public BookogsScraper(IHttpService httpService, IRetryServcie retryService)
+        public BookogsScraper(IHttpService httpService, ILogger<BookogsScraper> logger)
         {
             this.httpService = httpService;
-            this.retryService = retryService;
+            this.logger = logger;
         }
 
         public async Task<IEnumerable<Book>> ScrapeAsync()
         {
-            var rootObjects = await this.GetRootObjectsAsync();
-            var books = await this.GetBooksAsync(rootObjects);
-
-            return books;
-        }
-
-        private class Comp : IEqualityComparer<Rootobject>
-        {
-            public bool Equals(Rootobject x, Rootobject y)
+            try
             {
-                return (x.entities[0].title == y.entities[0].title);
+                var rootObjects = await this.GetRootObjectsAsync();
+                var books = await this.GetBooksAsync(rootObjects);
+
+                return books;
             }
-
-            public int GetHashCode(Rootobject obj)
+            catch (Exception ex)
             {
-                return obj.entities[0].title.GetHashCode();
+                this.logger.LogCritical(ex.ToString());
+
+                throw;
             }
         }
 
         private async Task<IEnumerable<Rootobject>> GetRootObjectsAsync()
         {
-            try
-            {
-                var totalPages = Enumerable.Range(1, await this.GetTotalPages());
-                var pageBatches = totalPages.ToBatches(300).Select(b => new { From = b.Min(), To = b.Max() });
-                var rootObjects = new ConcurrentBag<Rootobject>();
+            var totalPages = Enumerable.Range(1, await this.GetTotalPages());
+            var rootObjects = new ConcurrentBag<Rootobject>();
 
-                foreach (var pageBatch in pageBatches)
+            for (int p = 0; p < totalPages.Count(); p++)
+            {
+                try
                 {
-                    var apiCallTasks = new List<Task>();
-
-                    for (int p = pageBatch.From; p <= pageBatch.To; p++)
+                    Func<Task> call = async () =>
                     {
-                        Console.WriteLine($"Page: {p}");
+                        var url = string.Format(ApiUrl, p);
+                        var root = await this.httpService.GetAsync<Rootobject>(url);
 
-                        var task = Task.Run(async () =>
-                        {
-                            Func<Task> call = async () => await this.RunApiTaskAsync(rootObjects, p);
+                        rootObjects.Add(root);
+                    };
 
-                            await this.retryService.RetryAsync(call);
-                        });
-
-                        apiCallTasks.Add(task);
-
-                        await Task.Delay(1);
-                    }
-
-                    Task.WaitAll(apiCallTasks.ToArray());
-
-                    Console.WriteLine($"Batch from {pageBatch.From} to {pageBatch.To}");
-
-                    var x = rootObjects.Distinct(new Comp()).ToList();
-                    await Task.Delay(100);
+                    await call.RetryAsync();
                 }
-
-
-                return rootObjects;
+                catch (Exception ex)
+                {
+                    this.logger.LogError($"Page {p}. Dump: {ex}");
+                }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex.Message);
-                return null;
-            }
-        }
 
-        private async Task RunApiTaskAsync(ConcurrentBag<Rootobject> rootObjects, int page)
-        {
-            var url = string.Format(ApiUrl, page);
-
-            Console.WriteLine($"Queueing up: {url}");
-
-            var root = await this.httpService.GetAsync<Rootobject>(url);
-
-            rootObjects.Add(root);
-
-            Console.WriteLine("Added root.");
+            return rootObjects;
         }
 
         private async Task<int> GetTotalPages()
@@ -116,51 +82,47 @@ namespace OBT.Core.Scrapers
 
         private async Task<IEnumerable<Book>> GetBooksAsync(IEnumerable<Rootobject> rootObjects)
         {
-            var books = new List<Book>();
+            var books = new ConcurrentBag<Book>();
 
             foreach (var root in rootObjects)
             {
-                var scrapeTasks = new List<Task>();
-
                 foreach (var entity in root.entities)
                 {
-                    var scrapeTask = Task.Run(async () =>
+                    try
                     {
-                        try
-                        {
-                            var web = new HtmlWeb();
-                            var htmlDoc = await web.LoadFromWebAsync($"{BaseUrl}{entity.url}");
-                            var node = htmlDoc.DocumentNode;
-                            var book = new Book
-                            {
-                                Authors = this.GetValues(node, "Author"),
-                                Format = this.GetValue(node, "Format"),
-                                Genre = this.GetValue(node, "Genre"),
-                                Isbn10 = this.GetIsbn10(node),
-                                Isbn13 = this.GetIsbn13(node),
-                                Language = this.GetValue(node, "Language"),
-                                Pages = this.GetValue(node, "Listed Page Count").StripNonDigits(),
-                                Title = this.GetTitle(entity, node),
-                                Year = this.GetValue(node, "This Edition Published").ToYear()
-                            };
+                        Func<Task> call = async () => await this.GetBookAsync(books, entity);
 
-                            books.Add(book);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine(ex.Message);
-                        }
-                    });
-
-                    scrapeTasks.Add(scrapeTask);
-
-                    await Task.Delay(10);
+                        await call.RetryAsync(delay: 1000);
+                    }
+                    catch (Exception ex)
+                    {
+                        this.logger.LogError($"Book \"{entity.title}\" failed. Dump {ex}");
+                    }
                 }
-
-                Task.WaitAll(scrapeTasks.ToArray());
             }
 
             return books;
+        }
+
+        private async Task GetBookAsync(ConcurrentBag<Book> books, Entity entity)
+        {
+            var web = new HtmlWeb();
+            var htmlDoc = await web.LoadFromWebAsync($"{BaseUrl}{entity.url}");
+            var node = htmlDoc.DocumentNode;
+            var book = new Book
+            {
+                Authors = this.GetValues(node, "Author"),
+                Format = this.GetValue(node, "Format"),
+                Genre = this.GetValue(node, "Genre"),
+                Isbn10 = this.GetIsbn10(node),
+                Isbn13 = this.GetIsbn13(node),
+                Language = this.GetValue(node, "Language"),
+                Pages = this.GetValue(node, "Listed Page Count").StripNonDigits(),
+                Title = this.GetTitle(entity, node),
+                Year = this.GetValue(node, "This Edition Published").ToYear()
+            };
+
+            books.Add(book);
         }
 
         private string GetValue(HtmlNode node, string key)

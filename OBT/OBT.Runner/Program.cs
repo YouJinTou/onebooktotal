@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OBT.Core.Abstractions;
 using OBT.Core.Scrapers;
 using OBT.Core.Services;
@@ -11,12 +12,12 @@ namespace OBT.Runner
         {
             var serviceProvider = new ServiceCollection()
                 .AddHttpClient()
+                .AddLogging(lb => lb.AddConsole())
                 .AddTransient<IHttpService, HttpService>()
-                .AddTransient<IRetryServcie, RetryService>()
                 .BuildServiceProvider();
             var httpService = serviceProvider.GetService<IHttpService>();
-            var retryService = serviceProvider.GetService<IRetryServcie>();
-            var bookogs = new BookogsScraper(httpService, retryService);
+            var logger = serviceProvider.GetService<ILogger<BookogsScraper>>();
+            var bookogs = new BookogsScraper(httpService, logger);
 
             bookogs.ScrapeAsync().Wait();
         }

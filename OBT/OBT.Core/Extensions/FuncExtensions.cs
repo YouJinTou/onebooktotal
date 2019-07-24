@@ -3,7 +3,7 @@ using System.Threading.Tasks;
 
 namespace OBT.Core.Extensions
 {
-    public static class TaskExtensions
+    public static class FuncExtensions
     {
         public static async Task RetryAsync(
             this Func<Task> func, int maxAttempts = 5, int delay = 50)
@@ -20,8 +20,6 @@ namespace OBT.Core.Extensions
                 }
                 catch
                 {
-                    Console.WriteLine("Attempt " + attempts);
-
                     await Task.Delay(delay);
                 }
                 finally
