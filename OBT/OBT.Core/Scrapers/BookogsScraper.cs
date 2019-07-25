@@ -1,6 +1,7 @@
 ﻿using HtmlAgilityPack;
 using Microsoft.Extensions.Logging;
 using OBT.Core.Abstractions;
+using OBT.Core.DAL.Models.Mongo;
 using OBT.Core.Extensions;
 using OBT.Core.Models;
 using OBT.Core.Models.Bookogs;
@@ -18,11 +19,14 @@ namespace OBT.Core.Scrapers
         private const string TableXPath = "//tr[td='{0}']/td[2]/a/text()";
         private static readonly string ApiUrl = $"{BaseUrl}/api/browse/book?page={{0}}";
         private readonly IHttpService httpService;
+        private readonly IRepository<DbBook> books;
         private readonly ILogger<BookogsScraper> logger;
 
-        public BookogsScraper(IHttpService httpService, ILogger<BookogsScraper> logger)
+        public BookogsScraper(
+            IHttpService httpService, IRepository<DbBook> books, ILogger<BookogsScraper> logger)
         {
             this.httpService = httpService;
+            this.books = books;
             this.logger = logger;
         }
 
@@ -32,6 +36,8 @@ namespace OBT.Core.Scrapers
             {
                 var rootObjects = await this.GetRootObjectsAsync();
                 var books = await this.GetBooksAsync(rootObjects);
+
+                await this.PersistBooksAsync(books);
 
                 return books;
             }
@@ -71,15 +77,6 @@ namespace OBT.Core.Scrapers
             return rootObjects;
         }
 
-        private async Task<int> GetTotalPages()
-        {
-            var root = await this.httpService.GetAsync<Rootobject>(string.Format(ApiUrl, 1));
-            var booksPerPage = 40;
-            var totalPages = (root.total / booksPerPage) + 1;
-
-            return totalPages;
-        }
-
         private async Task<IEnumerable<Book>> GetBooksAsync(IEnumerable<Rootobject> rootObjects)
         {
             var books = new ConcurrentBag<Book>();
@@ -104,6 +101,38 @@ namespace OBT.Core.Scrapers
             return books;
         }
 
+        private async Task PersistBooksAsync(IEnumerable<Book> books)
+        {
+            var dbBooks = new List<DbBook>();
+
+            foreach (var book in books)
+            {
+                dbBooks.Add(new DbBook
+                {
+                    Title = book.Title,
+                    Authors = book.Authors,
+                    Format = book.Format,
+                    Genre = book.Genre,
+                    Isbn10 = book.Isbn10,
+                    Isbn13 = book.Isbn13,
+                    Language = book.Language,
+                    Pages = book.Pages,
+                    Year = book.Year
+                });
+            }
+
+            await this.books.AddManyAsync(dbBooks);
+        }
+
+        private async Task<int> GetTotalPages()
+        {
+            var root = await this.httpService.GetAsync<Rootobject>(string.Format(ApiUrl, 1));
+            var booksPerPage = 40;
+            var totalPages = (root.total / booksPerPage) + 1;
+
+            return totalPages;
+        }
+
         private async Task GetBookAsync(ConcurrentBag<Book> books, Entity entity)
         {
             var web = new HtmlWeb();
@@ -119,7 +148,7 @@ namespace OBT.Core.Scrapers
                 Language = this.GetValue(node, "Language"),
                 Pages = this.GetValue(node, "Listed Page Count").StripNonDigits(),
                 Title = this.GetTitle(entity, node),
-                Year = this.GetValue(node, "This Edition Published").ToYear()
+                Year = this.GetYear(node).ToYear()
             };
 
             books.Add(book);
@@ -174,6 +203,18 @@ namespace OBT.Core.Scrapers
             };
 
             return values.FirstOrDefault(v => v.IsIsbn13());
+        }
+
+        private string GetYear(HtmlNode node)
+        {
+            var values = new string[]
+            {
+                this.GetValue(node, "This Edition Published"),
+                this.GetValue(node, "First Published"),
+                this.GetValue(node, "Copyright")
+            };
+
+            return values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
         }
     }
 }
