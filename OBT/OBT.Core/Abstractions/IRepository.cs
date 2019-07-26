@@ -7,6 +7,6 @@ namespace OBT.Core.Abstractions
     {
         Task AddAsync(T item);
 
-        Task AddManyAsync(IEnumerable<T> items);
+        Task AddManyAsync(IEnumerable<T> items, bool ignoreErrors = false);
     }
 }
