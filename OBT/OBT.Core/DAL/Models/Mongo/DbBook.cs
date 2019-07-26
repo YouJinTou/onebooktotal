@@ -1,4 +1,5 @@
 ﻿using MongoDB.Bson.Serialization.Attributes;
+using OBT.Core.Extensions;
 using System.Collections.Generic;
 
 namespace OBT.Core.DAL.Models.Mongo
@@ -25,5 +26,14 @@ namespace OBT.Core.DAL.Models.Mongo
         public string Format { get; set; }
 
         public int? Pages { get; set; }
+
+        public override int GetHashCode()
+        {
+            var authors = string.Join(string.Empty, this.Authors ?? new string[] { });
+            var hashCode = $"{this.Isbn10}{this.Isbn13}{this.Title}{this.Year}{this.Format}"
+                .GetDeterministicHashCode();
+
+            return hashCode;
+        }
     }
 }
