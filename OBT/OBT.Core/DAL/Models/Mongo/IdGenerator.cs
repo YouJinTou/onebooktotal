@@ -11,20 +11,7 @@ namespace OBT.Core.DAL.Models.Mongo
 
             Validator.ThrowIfNull(book);
 
-            var authors = string.Join(string.Empty, book.Authors ?? new string[] { });
-
-            unchecked
-            {
-                var hash = 17;
-                hash = hash * 23 + book.Isbn10?.GetHashCode() ?? 3;
-                hash = hash * 23 + book.Isbn13?.GetHashCode() ?? 5;
-                hash = hash * 23 + book.Title?.GetHashCode() ?? 7;
-                hash = hash * 23 + book.Year?.GetHashCode() ?? 11;
-                hash = hash * 23 + book.Format?.GetHashCode() ?? 13;
-                hash = hash * 23 + authors.GetHashCode();
-
-                return hash.ToString();
-            }
+            return book.GetHashCode().ToString();
         }
 
         public bool IsEmpty(object id)
